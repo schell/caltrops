@@ -1,12 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
-module Html.Common where
+module Web.Common where
 
 import Prelude
---import Html.Url
-import Html.Bootstrap
---import Aws.S3
-import Control.Monad
 import Text.Blaze.Html5
 import qualified Text.Blaze.Html5 as H
 import Text.Blaze.Html5.Attributes as A

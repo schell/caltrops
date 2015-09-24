@@ -9,6 +9,7 @@ module Effect where
 import Data.Aeson
 import Data.Time.Calendar
 import Data.IntMap (IntMap)
+import Data.Text (Text)
 import GHC.Generics
 import Servant.API
 import Servant
@@ -58,8 +59,8 @@ instance ToJSON User
 instance ToJSON Day where
     toJSON d = toJSON (showGregorian d)
 
-data User = User { userName  :: String
-                 , userEmail :: String
+data User = User { userName  :: Text
+                 , userEmail :: Text
                  , userSince :: Day
                  } deriving (Eq, Show, Generic)
 

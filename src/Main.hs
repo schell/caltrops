@@ -12,7 +12,8 @@ module Main where
 
 import Effect
 import Auth
-import HTML.Login
+import Web.Login
+import Web.Form
 import Web.ClientSession
 import Data.Hashable
 import Data.Time.Calendar
@@ -53,31 +54,41 @@ loginHandlers = getLogin
            :<|> logout
 
 userHandlers :: ServerT UserAPI Effect
-userHandlers = getUsers :<|> getUser
+userHandlers = getUsers
+          :<|> getUserById
+          :<|> getUserByEmail
 
 getLogin :: Effect Html
-getLogin = return loginHtml
+getLogin = do
+    frm <- emptyForm "login" loginForm loginView
+    return $ loginWrapper frm
 
-postLogin :: LoginForm -> Effect (Headers '[Header "Set-Cookie" Text] Html)
-postLogin (LoginForm email pass) = do
-    logins <- get dataLogins
-    let k = hash email
-        mvalid = do hpass <- IM.lookup k logins
-                    return $ validatePassword hpass $ B.pack pass
-    case mvalid of
-        Just True -> do ky <- liftIO getDefaultKey
-                        u' <- liftIO $ encryptIO ky $ B.pack $ show k
-                        let cred = cookieText (T.pack $ B.unpack u')
-                                              (T.pack $ show cookieLife)
-                        return $ addHeader cred loginSuccessHtml
-        _ -> return $ addHeader "" loginFailureHtml
+postLogin :: [(Text,Text)] -> Effect (Headers '[SetCookieAuth] Html)
+postLogin fields = do
+    result <- getFormResult "login" loginForm fields
+    case result of
+        (view, Nothing) -> do
+            let html = loginWrapper $ loginView $ (toHtml <$> view)
+            return $ addHeader nullCookie html
+        (_, Just (Login email pass)) -> do
+            logins <- get dataLogins
+            let k = hash email
+                mvalid = do hpass <- IM.lookup k logins
+                            return $ validatePassword hpass $ B.pack $ T.unpack pass
+            case mvalid of
+                Just True -> do ck <- liftIO $ loginCookieForEmail $ T.unpack email
+                                return $ addHeader ck loginSuccessHtml
+                _ -> return $ addHeader nullCookie loginFailureHtml
 
-logout :: Effect (Headers '[Header "Set-Cookie" Text] Html)
-logout = return $ addHeader nullCookie $ logoutHtml
+logout :: Effect (Headers '[SetCookieAuth] Html)
+logout = return $ addHeader nullCookie logoutHtml
 
-getUser :: Maybe Text -> Id -> Effect User
-getUser Nothing _ = left $ err403
-getUser (Just blob) (Id i) = validate blob $ const $ do
+getUserByEmail :: Maybe LoginCookie -> String -> Effect User
+getUserByEmail mck = getUserById mck . Id . hash
+
+getUserById :: Maybe LoginCookie -> Id -> Effect User
+getUserById Nothing _ = left $ err403
+getUserById (Just ck) (Id i) = authorize ck $ do
     users <- get dataUsers
     case IM.lookup i users of
         Nothing -> left $ err404 { errBody = "User does not exist." }
@@ -94,12 +105,13 @@ getUsers = do
 type API = LoginAPI :<|> UserAPI
 
 type LoginAPI = "login" :> Get '[HTML] Html
-           :<|> "login" :> ReqBody '[FormUrlEncoded] LoginForm
-                        :> Post '[HTML] (Headers '[Header "Set-Cookie" Text] Html)
-           :<|> "logout" :> Get '[HTML] (Headers '[Header "Set-Cookie" Text] Html)
+           :<|> "login" :> ReqBody '[FormUrlEncoded] [(Text,Text)]
+                        :> Post '[HTML] (Headers '[SetCookieAuth] Html)
+           :<|> "logout" :> Get '[HTML] (Headers '[SetCookieAuth] Html)
 
 type UserAPI = "users" :> Get '[JSON] [User]
-          :<|> "user" :> Header "Cookie" Text :> Capture "userId" Id :> Get '[JSON] User
+          :<|> "user" :> CookieAuth :> Capture "userId" Id :> Get '[JSON] User
+          :<|> "user" :> CookieAuth :> Capture "userEmail" String :> Get '[JSON] User
 --------------------------------------------------------------------------------
 -- USERS
 --------------------------------------------------------------------------------

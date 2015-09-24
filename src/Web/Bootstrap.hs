@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Html.Bootstrap where
+module Web.Bootstrap where
 
 import Data.Text (Text)
 import qualified Data.Text as T
