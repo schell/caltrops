@@ -3,10 +3,6 @@ module Web.Form where
 import Data.Text (Text)
 import Text.Blaze.Html5 hiding (text)
 import Text.Digestive as D
-import Text.Digestive.Form
-import Text.Digestive.Types
-import Text.Digestive.View
-import Text.Digestive.Form.Encoding
 
 getFormResult :: Monad m
               => Text -> Form v m a -> [(Text, Text)] -> m (View v, Maybe a)

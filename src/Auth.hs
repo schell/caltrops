@@ -9,12 +9,11 @@
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 module Auth where
 
+import API
 import Effect
 import Servant
 import Web.ClientSession
-import Data.Hashable
 import Data.Text (Text)
-import Data.ByteString.Conversion.To
 import qualified Data.ByteString.Char8 as B
 import qualified Data.Text as T
 import Data.Map as M
@@ -22,12 +21,19 @@ import Data.Maybe
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Either
 
-loginCookieForEmail :: String -> IO LoginCookie
-loginCookieForEmail email = do
+loginCookieForId :: Id -> IO LoginCookie
+loginCookieForId (Id i) = do
     key <- getDefaultKey
-    hsh <- encryptIO key $ B.pack $ show $ hash email
+    hsh <- encryptIO key $ B.pack $ show i
     return $ LoginCookie $ cookieText (T.pack $ B.unpack hsh)
                                       (T.pack $ show cookieLife)
+
+requireAuth :: Maybe LoginCookie -> Effect b -> Effect b
+requireAuth mck f = requireAuthWith mck $ const f
+
+requireAuthWith :: Maybe LoginCookie -> (Id -> Effect a) -> Effect a
+requireAuthWith Nothing _ = left $ err401
+requireAuthWith (Just ck) f = authorizeWith ck f
 
 authorize :: LoginCookie -> Effect a -> Effect a
 authorize blob = authorizeWith blob . const
@@ -50,15 +56,7 @@ nullCookie = LoginCookie $ cookieText "" "-1"
 
 cookieText :: Text -> Text -> Text
 cookieText val age =
-    T.concat [ cookieName
-              , "="
-              , val
-              , "; "
-              , "Path=/; "
-              , "Max-Age="
-              , age
-              , "; HttpOnly"
-              ]
+    T.concat [ cookieName, "=", val, "; Path=/; Max-Age=", age, "; HttpOnly" ]
 
 cookieName :: Text
 cookieName = "cookie"
@@ -72,15 +70,6 @@ parseCookies = Prelude.foldl mapify M.empty . Prelude.map tuple . splitCookies
 cookieLife :: Int
 cookieLife = 2592000 -- Default sign-in cookie life is 30 days worth of seconds
 
-type SetCookieAuth = Header "Set-Cookie" LoginCookie
-type CookieAuth = Header "Cookie" LoginCookie
-
 type CookieMap = Map Text Text
 
-instance ToByteString LoginCookie where
-    builder = builder . unLoginCookie
 
-instance FromText LoginCookie where
-    fromText = Just . LoginCookie
-
-newtype LoginCookie = LoginCookie { unLoginCookie :: Text }

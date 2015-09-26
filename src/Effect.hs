@@ -1,37 +1,56 @@
+{-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE StandaloneDeriving #-}
-{-# OPTIONS_GHC -fno-warn-orphans #-}
-module Effect where
+{-# LANGUAGE FlexibleContexts #-}
+module Effect (
+    module U,
+    Data(..),
+    Effect,
+    runUserUpdate,
+    getLogins,
+    getUsers,
+    getUserByEmail,
+    runServantEffect
+) where
 
-import Data.Aeson
-import Data.Time.Calendar
-import Data.IntMap (IntMap)
+import API
+import Web.User as U
 import Data.Text (Text)
-import GHC.Generics
-import Servant.API
+import Data.Acid
+import Data.Acid.Core (MethodState, MethodResult)
 import Servant
 import Control.Monad.Reader
 import Control.Monad.Trans.Either
-import Control.Concurrent.STM
-import Data.ByteString (ByteString)
 
-fresh :: Effect Id
-fresh = do
-    i <- get dataId
-    put dataId $ i + 1
-    return i
+data Data = Data { userData :: AcidState UserData }
 
-modify :: (Data -> TVar a) -> (a -> a) -> Effect ()
-modify f g = g <$> get f >>= put f
+type Effect = (EitherT ServantErr (ReaderT Data IO))
 
-put :: (Data -> TVar a) -> a -> Effect ()
-put f a = asks f >>= liftIO . atomically . flip writeTVar a
+runUserUpdate :: (UpdateEvent event, MethodState event ~ UserData)
+              => event -> Effect (MethodResult event)
+runUserUpdate f = do
+    acid <- asks userData
+    liftIO $ update acid f
 
-get :: (Data -> TVar a) -> Effect a
-get f = asks f >>= liftIO . readTVarIO
+getUserByEmail :: Text -> Effect (Maybe User)
+getUserByEmail e = do
+    users <- getUsers
+    return $ foldl look4Email Nothing users
+        where look4Email (Just u) _ = Just u
+              look4Email Nothing u  = if userEmail u == e
+                                      then Just u
+                                      else Nothing
+
+getLogins :: Effect Logins
+getLogins = getsUserData udataLogins
+
+getUsers :: Effect Users
+getUsers = getsUserData udataUsers
+
+getsUserData :: (UserData -> a) -> Effect a
+getsUserData f = do
+    acid <- asks userData
+    f <$> (liftIO $ query acid GetUserData)
 
 runServantEffect :: Data -> Effect :~> EitherT ServantErr IO
 runServantEffect dat = Nat $ effectToServant dat
@@ -42,33 +61,3 @@ effectToServant dat s = do
     case result of
         Left err -> left err
         Right a  -> right a
-
-type Effect = (EitherT ServantErr (ReaderT Data IO))
-
-data Data = Data { dataId     :: TVar Id
-                 , dataUsers  :: TVar Users
-                 , dataLogins :: TVar Logins
-                 }
-
-type Logins = IntMap ByteString
-
-type Users = IntMap User
-
-instance ToJSON User
-
-instance ToJSON Day where
-    toJSON d = toJSON (showGregorian d)
-
-data User = User { userName  :: Text
-                 , userEmail :: Text
-                 , userSince :: Day
-                 } deriving (Eq, Show, Generic)
-
-deriving instance FromText Id
-deriving instance ToJSON Id
-deriving instance Num Id
-deriving instance Eq Id
-deriving instance Read Id
-deriving instance Show Id
-
-newtype Id = Id { unId :: Int }

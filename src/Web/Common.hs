@@ -12,6 +12,12 @@ import Text.Blaze.Html5.Attributes as A
 --        H.h3 "S3 Error"
 --        H.pre $ H.toHtml $ show err
 
+formWrapper :: ToValue v => Html -> v -> Html
+formWrapper x loc =
+    H.form ! method "POST" ! action (toValue loc) $ do
+        x
+        button ! type_ "submit" ! class_ "btn btn-default" $ "Submit"
+
 headNavContentHtml :: Html -> Html -> Html -> Html
 headNavContentHtml h n f =
     docTypeHtml ! lang "en" $ do
@@ -49,9 +55,9 @@ guestContainer f = headNavContentHtml
 
 loggedInHeader :: Html
 loggedInHeader = nav ! class_ "navbar navbar-default" $
-    H.div ! class_ "container-fluid" $ mempty --do
---        H.div ! class_ "navbar-header" $
---            a ! class_ "navbar-brand" ! href (val UrlHome) $
+    H.div ! class_ "container-fluid" $ do
+        H.div ! class_ "navbar-header" $
+            p ! class_ "navbar-brand" $ ":)"
 --                i ! class_ "fa fa-home" $ mempty
 --        ul ! class_ "nav navbar-nav" $ do
 --            liDropdown (faIcon "file" $ do

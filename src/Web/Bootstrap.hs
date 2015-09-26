@@ -1,10 +1,13 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE PartialTypeSignatures #-}
 module Web.Bootstrap where
 
 import Data.Text (Text)
+import Text.Digestive
+import qualified Text.Digestive.Blaze.Html5 as F
 import qualified Data.Text as T
 import Text.Blaze.Html5
---import qualified Text.Blaze.Html5 as H
+import qualified Text.Blaze.Html5 as H
 import Text.Blaze.Html5.Attributes as A
 
 role :: AttributeValue -> Attribute
@@ -34,3 +37,16 @@ faIcon :: Text -> Html -> Html
 faIcon icn htmel = do
     i ! class_ (toValue $ "fa fa-" `T.append` icn) $ mempty
     htmel
+
+bootstrapFormField :: (Text -> View Html -> Html) -> Text -> Html -> View Html -> Html
+bootstrapFormField inp fname tle view =
+    H.div ! class_ "form-group" $ do
+        F.label fname view tle
+        inp fname view ! class_ "form-control"
+        F.errorList fname view
+
+bootstrapFormFieldInput :: Text -> Html -> View Html -> Html
+bootstrapFormFieldInput = bootstrapFormField F.inputText
+
+bootstrapFormFieldPassword :: Text -> Html -> View Html -> Html
+bootstrapFormFieldPassword = bootstrapFormField F.inputPassword

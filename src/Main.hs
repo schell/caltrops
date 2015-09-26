@@ -7,43 +7,43 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE RecordWildCards #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 module Main where
 
 import Effect
 import Auth
+import API
+import Web.Common
 import Web.Login
 import Web.Form
-import Web.ClientSession
 import Data.Hashable
 import Data.Time.Calendar
+import Data.Time.Clock
 import Data.Text (Text)
+import Data.Acid
 import qualified Data.ByteString.Char8 as B
 import qualified Data.Text as T
 import qualified Data.IntMap as IM
+import qualified Text.Digestive.Blaze.Html5 as F
 import Network.Wai.Handler.Warp
 import Servant
 import Servant.HTML.Blaze
 import Text.Blaze.Html
+import Text.Blaze.Renderer.Pretty (renderMarkup)
+import Control.Monad.Reader
 import Control.Monad.Trans.Either
-import Control.Concurrent.STM
-import Control.Monad.IO.Class (liftIO)
 import Crypto.BCrypt
 
 main :: IO ()
 main = do
     putStrLn "Caltrops!"
     (users,logins) <- superUsers
-    dat <- Data <$> (atomically $ newTVar 0)
-                <*> (atomically $ newTVar users)
-                <*> (atomically $ newTVar logins)
-    run 8081 $ serve api $ dataServer dat
+    acid <- openLocalState $ UserData 0 users logins
+    run 8081 $ serve api $ dataServer $ Data acid
 
 dataServer :: Data -> Server API
 dataServer dat = enter (runServantEffect dat) handlers
-
-api :: Proxy API
-api = Proxy
 
 handlers :: ServerT API Effect
 handlers = loginHandlers :<|> userHandlers
@@ -54,76 +54,105 @@ loginHandlers = getLogin
            :<|> logout
 
 userHandlers :: ServerT UserAPI Effect
-userHandlers = getUsers
-          :<|> getUserById
-          :<|> getUserByEmail
+userHandlers = users
+          :<|> userById
+          :<|> userUpdate
+          :<|> userUpdatePost
+    where userByEmail mck txt = requireAuth mck $ do muser <- getUserByEmail txt
+                                                     maybe userDNE return muser
+          userById mck i = requireAuth mck $ do muser <- getUserById i
+                                                maybe userDNE return muser
+          users mck = requireAuth mck $ (map snd . IM.toList) <$> getUsers
+          userUpdate mck = requireAuthWith mck $ \i -> do
+                               muser <- getUserById i
+                               maybe userDNE userUpdatePage muser
+          userUpdatePost mck fields = requireAuthWith mck $ \u ->
+                                        postUserUpdate u fields
+
+userDNE :: Effect a
+userDNE = left $ err404{ errBody = "User does not exist." }
 
 getLogin :: Effect Html
-getLogin = do
-    frm <- emptyForm "login" loginForm loginView
-    return $ loginWrapper frm
+getLogin = loginPage
 
 postLogin :: [(Text,Text)] -> Effect (Headers '[SetCookieAuth] Html)
 postLogin fields = do
     result <- getFormResult "login" loginForm fields
     case result of
         (view, Nothing) -> do
-            let html = loginWrapper $ loginView $ (toHtml <$> view)
+            let v = toHtml <$> view
+                html = guestContainer $ formWrapper (loginView v) loginLink
             return $ addHeader nullCookie html
         (_, Just (Login email pass)) -> do
-            logins <- get dataLogins
-            let k = hash email
-                mvalid = do hpass <- IM.lookup k logins
-                            return $ validatePassword hpass $ B.pack $ T.unpack pass
-            case mvalid of
-                Just True -> do ck <- liftIO $ loginCookieForEmail $ T.unpack email
-                                return $ addHeader ck loginSuccessHtml
+            logins <- getLogins
+            muser  <- getUserByEmail email
+            let mvalid = do user  <- muser
+                            hpass <- IM.lookup (unId $ userId user) logins
+                            let pass' = B.pack $ T.unpack pass
+                            return $ (user, validatePassword hpass pass')
+
+            -- Update last seen
+            now   <- liftIO $ getCurrentTime
+            let mvalid' = do (user,valid) <- mvalid
+                             return $ (user{ userLastSeen = now }, valid)
+
+            case mvalid' of
+                Just (user, True) -> do
+                    runUserUpdate $ UpdateUser user
+                    ck <- liftIO $ loginCookieForId $ userId user
+                    return $ addHeader ck loginSuccessHtml
                 _ -> return $ addHeader nullCookie loginFailureHtml
 
 logout :: Effect (Headers '[SetCookieAuth] Html)
 logout = return $ addHeader nullCookie logoutHtml
 
-getUserByEmail :: Maybe LoginCookie -> String -> Effect User
-getUserByEmail mck = getUserById mck . Id . hash
+postUserUpdate :: Id -> [(Text,Text)] -> Effect Html
+postUserUpdate u fields = do
+    result <- getFormResult "user" (userUpdateForm Nothing) fields
+    case result of
+        (view, Nothing) -> do
+            let v = toHtml <$> view
+            liftIO $ print $ renderMarkup $ F.errorList "password" v
+            return $ userContainer $ formWrapper (userUpdateView v) userUpdateLink
 
-getUserById :: Maybe LoginCookie -> Id -> Effect User
-getUserById Nothing _ = left $ err403
-getUserById (Just ck) (Id i) = authorize ck $ do
-    users <- get dataUsers
-    case IM.lookup i users of
-        Nothing -> left $ err404 { errBody = "User does not exist." }
-        Just u  -> return u
+        (_, Just uu) -> do
+            muser <- getUserById u
+            let muser' = applyUpdateUser uu <$> muser
+                mpass  = updatedPassword uu
+            case muser' of
+                Just user -> do
+                    runUserUpdate $ UpdateUser user
+                    case mpass of
+                        Just pass -> do
+                            let p' = B.pack $ T.unpack pass
+                            Just hpass <- liftIO $ hashPasswordUsingPolicy
+                                                     slowerBcryptHashingPolicy
+                                                     p'
+                            runUserUpdate $ UpdatePassword u hpass
+                        Nothing   -> return ()
+                    return userUpdateSuccessHtml
+                Nothing -> userDNE
 
-getUsers :: Effect [User]
-getUsers = do
-   users <- get dataUsers
-   return $ map snd $ IM.toList users
 
---------------------------------------------------------------------------------
--- API
---------------------------------------------------------------------------------
-type API = LoginAPI :<|> UserAPI
+getUserById :: Id -> Effect (Maybe User)
+getUserById (Id i) = do
+    users <- getUsers
+    return $ IM.lookup i users
 
-type LoginAPI = "login" :> Get '[HTML] Html
-           :<|> "login" :> ReqBody '[FormUrlEncoded] [(Text,Text)]
-                        :> Post '[HTML] (Headers '[SetCookieAuth] Html)
-           :<|> "logout" :> Get '[HTML] (Headers '[SetCookieAuth] Html)
-
-type UserAPI = "users" :> Get '[JSON] [User]
-          :<|> "user" :> CookieAuth :> Capture "userId" Id :> Get '[JSON] User
-          :<|> "user" :> CookieAuth :> Capture "userEmail" String :> Get '[JSON] User
 --------------------------------------------------------------------------------
 -- USERS
 --------------------------------------------------------------------------------
 superUsers :: IO (Users, Logins)
 superUsers = do
+    utc <- getCurrentTime
     Just hpass <- hashPasswordUsingPolicy slowerBcryptHashingPolicy "changeme"
-    let schellEmail = "efsubenovex@gmail.com"
+    let date = fromGregorian 2015 9 21
+        schellEmail = "efsubenovex@gmail.com"
         aaronEmail = "aaronmaus@gmail.com"
-        users = IM.fromList [ (hash schellEmail, User "Schell Scivally" schellEmail $ fromGregorian 2015 9 21)
-                            , (hash aaronEmail, User "Aaron Maus" aaronEmail $ fromGregorian 2015 9 21)
+        users = IM.fromList [ (0, User 0 "Schell Scivally" schellEmail date utc)
+                            , (1, User 0 "Aaron Maus" aaronEmail date utc)
                             ]
-        logins = IM.fromList [ (hash schellEmail, hpass)
-                             , (hash aaronEmail, hpass)
+        logins = IM.fromList [ (0, hpass)
+                             , (1, hpass)
                              ]
     return (users,logins)
