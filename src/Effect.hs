@@ -13,7 +13,7 @@ module Effect (
     runServantEffect
 ) where
 
-import API
+import Caltrops.Client
 import Web.User as U
 import Data.Text (Text)
 import Data.Acid

@@ -11,6 +11,7 @@
 module Web.User where
 
 import API
+import Caltrops.Common
 import Web.Bootstrap
 import Web.Common
 import qualified Data.IntMap as IM
@@ -20,7 +21,6 @@ import Data.SafeCopy
 import Data.Acid
 import Data.Typeable
 import Data.ByteString (ByteString)
-import qualified Data.ByteString.Char8 as B
 import GHC.Generics
 import Control.Monad.State
 import Control.Monad.Reader
@@ -29,7 +29,6 @@ import qualified Data.Text as T
 import Text.Blaze.Html5 (Html)
 import qualified Text.Blaze.Html5 as H
 import Text.Digestive
-import Crypto.BCrypt
 
 
 type Logins = IntMap ByteString
@@ -68,7 +67,7 @@ fresh = do
     modify $ \dat -> dat{ udataNextId = i + 1 }
     return i
 
-$(makeAcidic ''UserData ['putUserData
+$(makeAcidic ''UserData [ 'putUserData
                         , 'getUserData
                         , 'updateUser
                         , 'fresh

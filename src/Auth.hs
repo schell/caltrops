@@ -9,7 +9,7 @@
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 module Auth where
 
-import API
+import Caltrops.Client
 import Effect
 import Servant
 import Web.ClientSession
@@ -25,8 +25,11 @@ loginCookieForId :: Id -> IO LoginCookie
 loginCookieForId (Id i) = do
     key <- getDefaultKey
     hsh <- encryptIO key $ B.pack $ show i
-    return $ LoginCookie $ cookieText (T.pack $ B.unpack hsh)
-                                      (T.pack $ show cookieLife)
+    return $ LoginCookie $ T.pack $ B.unpack hsh
+
+loginCookie2Header :: LoginCookie -> HeaderCookie
+loginCookie2Header (LoginCookie txt) =
+    HeaderCookie $ cookieText txt (T.pack $ show cookieLife)
 
 requireAuth :: Maybe LoginCookie -> Effect b -> Effect b
 requireAuth mck f = requireAuthWith mck $ const f
@@ -51,8 +54,8 @@ authorizeWith (LoginCookie blob) f = do
         Nothing -> left $ err403{ errBody = "Unauthorized :(" }
         Just u  -> f u
 
-nullCookie :: LoginCookie
-nullCookie = LoginCookie $ cookieText "" "-1"
+nullCookie :: HeaderCookie
+nullCookie = HeaderCookie $ cookieText "" "-1"
 
 cookieText :: Text -> Text -> Text
 cookieText val age =

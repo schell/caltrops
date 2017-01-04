@@ -2,6 +2,7 @@
 module Web.Login where
 
 import API
+import Caltrops.Client
 import Web.Common
 import Web.Bootstrap
 import Data.Text (Text)

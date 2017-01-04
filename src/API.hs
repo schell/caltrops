@@ -12,6 +12,7 @@ module API where
 
 import Servant
 import Servant.HTML.Blaze
+import Caltrops.Client
 import Text.Blaze.Html
 import Data.Text (Text)
 import Data.ByteString.Conversion.To
@@ -47,6 +48,7 @@ loginAPI = Proxy
 
 type LoginAPI = LoginGET
            :<|> LoginPOST
+           :<|> LoginJSON
            :<|> LogoutGET
 
 type LoginGET  = "login" :> Get '[HTML] Html
@@ -75,44 +77,14 @@ type UserUpdatePOST =
 --------------------------------------------------------------------------------
 -- Auth Header Types
 --------------------------------------------------------------------------------
-type SetCookieAuth = Header "Set-Cookie" LoginCookie
+type SetCookieAuth = Header "Set-Cookie" HeaderCookie
 type CookieAuth = Header "Cookie" LoginCookie
 
-instance ToByteString LoginCookie where
-    builder = builder . unLoginCookie
+instance ToByteString HeaderCookie where
+    builder = builder . unHeaderCookie
 
 instance FromText LoginCookie where
     fromText = Just . LoginCookie
 
-newtype LoginCookie = LoginCookie { unLoginCookie :: Text }
---------------------------------------------------------------------------------
--- User Types
---------------------------------------------------------------------------------
-newtype Id = Id { unId :: Int }
 
-deriving instance FromText Id
-deriving instance ToJSON Id
-deriving instance Typeable Id
-deriving instance Num Id
-deriving instance Eq Id
-deriving instance Read Id
-deriving instance Show Id
 
-data User = User { userId       :: Id
-                 , userName     :: Text
-                 , userEmail    :: Text
-                 , userSince    :: Day
-                 , userLastSeen :: UTCTime
-                 } deriving (Eq, Show, Generic, Typeable)
-
-instance ToJSON Day where
-    toJSON d = toJSON (showGregorian d)
-
-instance ToJSON User
-
---------------------------------------------------------------------------------
--- Login Types
---------------------------------------------------------------------------------
-data Login = Login { loginEmail :: Text
-                   , loginPass :: Text
-                   } deriving (Show, Eq)

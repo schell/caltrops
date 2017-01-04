@@ -14,10 +14,10 @@ module Main where
 import Effect
 import Auth
 import API
+import Caltrops.Client
 import Web.Common
 import Web.Login
 import Web.Form
-import Data.Hashable
 import Data.Time.Calendar
 import Data.Time.Clock
 import Data.Text (Text)
@@ -28,7 +28,6 @@ import qualified Data.IntMap as IM
 import qualified Text.Digestive.Blaze.Html5 as F
 import Network.Wai.Handler.Warp
 import Servant
-import Servant.HTML.Blaze
 import Text.Blaze.Html
 import Text.Blaze.Renderer.Pretty (renderMarkup)
 import Control.Monad.Reader
@@ -49,17 +48,22 @@ handlers :: ServerT API Effect
 handlers = loginHandlers :<|> userHandlers
 
 loginHandlers :: ServerT LoginAPI Effect
-loginHandlers = getLogin
-           :<|> postLogin
-           :<|> logout
+loginHandlers = loginGet
+    :<|> loginPost
+    :<|> loginJSON'
+    :<|> logoutGet
+    where loginGet = loginPage
+          loginPost = postLogin
+          loginJSON' l = loginWith l return
+          logoutGet = logout
 
 userHandlers :: ServerT UserAPI Effect
 userHandlers = users
           :<|> userById
           :<|> userUpdate
           :<|> userUpdatePost
-    where userByEmail mck txt = requireAuth mck $ do muser <- getUserByEmail txt
-                                                     maybe userDNE return muser
+    where --userByEmail mck txt = requireAuth mck $ do muser <- getUserByEmail txt
+          --                                           maybe userDNE return muser
           userById mck i = requireAuth mck $ do muser <- getUserById i
                                                 maybe userDNE return muser
           users mck = requireAuth mck $ (map snd . IM.toList) <$> getUsers
@@ -72,9 +76,6 @@ userHandlers = users
 userDNE :: Effect a
 userDNE = left $ err404{ errBody = "User does not exist." }
 
-getLogin :: Effect Html
-getLogin = loginPage
-
 postLogin :: [(Text,Text)] -> Effect (Headers '[SetCookieAuth] Html)
 postLogin fields = do
     result <- getFormResult "login" loginForm fields
@@ -83,25 +84,31 @@ postLogin fields = do
             let v = toHtml <$> view
                 html = guestContainer $ formWrapper (loginView v) loginLink
             return $ addHeader nullCookie html
-        (_, Just (Login email pass)) -> do
-            logins <- getLogins
-            muser  <- getUserByEmail email
-            let mvalid = do user  <- muser
-                            hpass <- IM.lookup (unId $ userId user) logins
-                            let pass' = B.pack $ T.unpack pass
-                            return $ (user, validatePassword hpass pass')
+        (_, Just l) -> loginWith l $ \mck ->
+            case mck of
+                Nothing -> return $ addHeader nullCookie loginFailureHtml
+                Just ck -> return $ addHeader (loginCookie2Header ck) loginSuccessHtml
 
-            -- Update last seen
-            now   <- liftIO $ getCurrentTime
-            let mvalid' = do (user,valid) <- mvalid
-                             return $ (user{ userLastSeen = now }, valid)
+loginWith :: Login -> (Maybe LoginCookie -> Effect a) -> Effect a
+loginWith (Login email pass) f = do
+    logins <- getLogins
+    muser  <- getUserByEmail email
+    let mvalid = do user  <- muser
+                    hpass <- IM.lookup (unId $ userId user) logins
+                    let pass' = B.pack $ T.unpack pass
+                    return $ (user, validatePassword hpass pass')
 
-            case mvalid' of
-                Just (user, True) -> do
-                    runUserUpdate $ UpdateUser user
-                    ck <- liftIO $ loginCookieForId $ userId user
-                    return $ addHeader ck loginSuccessHtml
-                _ -> return $ addHeader nullCookie loginFailureHtml
+    -- Update last seen
+    now   <- liftIO $ getCurrentTime
+    let mvalid' = do (user,valid) <- mvalid
+                     return $ (user{ userLastSeen = now }, valid)
+
+    case mvalid' of
+        Just (user, True) -> do
+            runUserUpdate $ UpdateUser user
+            (liftIO $ loginCookieForId $ userId user) >>= f . Just
+        _ -> f Nothing
+
 
 logout :: Effect (Headers '[SetCookieAuth] Html)
 logout = return $ addHeader nullCookie logoutHtml
